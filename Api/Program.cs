@@ -1,23 +1,53 @@
+using Application.Common.Behaviors;
+using FluentValidation;
+using Infrastructure;
+using MediatR;
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+const string AllowAll = "AllowAll";
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(AllowAll, policy =>
+        policy
+            .AllowAnyOrigin()
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+});
 
 builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.CustomSchemaIds(type =>
+        (type.FullName ?? type.Name)
+            .Replace("+", ".")
+            .Replace("`1", "")
+            .Replace("`2", "")
+    );
+});
+
+builder.Services.AddInfrastructure(builder.Configuration);
+
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(ValidationBehavior<,>).Assembly));
+builder.Services.AddValidatorsFromAssembly(typeof(ValidationBehavior<,>).Assembly);
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-}
+if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(); }
 
-app.UseHttpsRedirection();
-
-app.UseAuthorization();
+app.UseCors(AllowAll);
 
 app.MapControllers();
 
-app.Run();
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<Infrastructure.Persistence.ApplicationDbContext>();
+    await db.Database.MigrateAsync();
+}
+
+
+await app.RunAsync();
