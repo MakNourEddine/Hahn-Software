@@ -40,8 +40,7 @@ A small yet realistic API demonstrating **Clean Architecture** (Domain / Applica
 - **Domain Events** bridged to MediatR notifications  
 - **Swagger/OpenAPI** via Swashbuckle  
 - **xUnit** + FluentAssertions (unit tests)  
-- **Docker Compose** (API + SQL Server 2022)  
-- Optional: **Serilog** for structured logging
+- **Docker Compose** (API + SQL Server 2022)
 
 ---
 
@@ -82,7 +81,7 @@ A small yet realistic API demonstrating **Clean Architecture** (Domain / Applica
 - `AppointmentCancelledEvent(AppointmentId, Reason)`
 
 **Business rules**
-- Clinic hours 09:00–17:00 **UTC** (configurable).  
+- Clinic hours 09:00–17:00 **UTC**.  
 - Start times align to **15-minute grid**.  
 - **No overlapping** appointments for the same dentist (enforced in domain logic).
 
@@ -91,7 +90,6 @@ A small yet realistic API demonstrating **Clean Architecture** (Domain / Applica
 ## Project Structure
 
 ```
-src/
   Domain/
     Appointments/Appointment.cs (+ Events/)
     Dentists/Dentist.cs
@@ -124,10 +122,9 @@ src/
       PatientsController.cs
       ServicesController.cs
     Program.cs (Swagger, CORS, DI, Auto-Migrate)
-  Tests/
-    UnitTests/
-      Domain/*
-      Application/*
+  UnitTests/
+    BookAppointmentValidatorTests.cs
+    RescheduleOverlapTests.cs
 docker-compose.yml
 ```
 
@@ -142,25 +139,41 @@ docker-compose.yml
 MSSQL_SA_PASSWORD=N0vaDent-Clinic#2025+SQL
 ```
 
-2) `docker-compose.yml` (summary):
+2) `docker-compose.yml`:
 ```yaml
-version: "3.9"
 services:
   db:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: dentist-db
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
-    ports: ["1433:1433"]
-    volumes: ["mssqldata:/var/opt/mssql"]
+      SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssqldata:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P '${MSSQL_SA_PASSWORD}' -No -Q 'SELECT 1' -C"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
   api:
-    build: .
+    image: ${DOCKER_REGISTRY-}api
+    build:
+      context: .
+      dockerfile: Api/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Default: "Server=db,1433;Database=DentistBooking;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=true;"
-    ports: ["8080:8080"]
-    depends_on: ["db"]
-volumes: { mssqldata: {} }
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  mssqldata:
 ```
 
 3) Run:
@@ -179,7 +192,7 @@ docker run -d --name sqlserver `
   -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
 ```
 
-2) Configure **`Api/appsettings.Development.json`**:
+2) Configure **`Api/appsettings.json`**:
 ```json
 {
   "ConnectionStrings": {
@@ -203,22 +216,23 @@ Add-Migration InitialCreate -Project Infrastructure -StartupProject Api
 Update-Database -Project Infrastructure -StartupProject Api
 ```
 
-> Seed with **fixed GUIDs** (no `Guid.NewGuid()` in `HasData`) to keep migrations deterministic.
-
 ---
 
 ## Configuration
 
-**`appsettings.Development.json`**
+**`appsettings.json`**
 ```json
 {
-  "ConnectionStrings": {
-    "Default": "Server=localhost,1433;Database=DentistBooking;User Id=sa;Password=YOUR_PWD;TrustServerCertificate=true;Encrypt=false"
-  },
   "Logging": {
-    "LogLevel": { "Default": "Information", "Microsoft.AspNetCore": "Warning" }
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
   },
-  "AllowedHosts": "*"
+  "AllowedHosts": "*",
+  "ConnectionStrings": {
+    "Default": "Server=localhost,1433;Database=DentistBooking;User Id=sa;Password=N0vaDent-Clinic#2025+SQL;TrustServerCertificate=true;Encrypt=false"
+  }
 }
 ```
 
@@ -235,16 +249,12 @@ builder.Services.AddSwaggerGen(o =>
   o.CustomSchemaIds(t => (t.FullName ?? t.Name).Replace("+",".")));
 ```
 
-**Auto-migrate on startup (optional)**
+**Auto-migrate on startup**
 ```csharp
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    for (var i = 1; i <= 5; i++)
-    {
-        try { await db.Database.MigrateAsync(); break; }
-        catch when (i < 5) { await Task.Delay(2000 * i); }
-    }
+    var db = scope.ServiceProvider.GetRequiredService<Infrastructure.Persistence.ApplicationDbContext>();
+    await db.Database.MigrateAsync();
 }
 ```
 
@@ -393,7 +403,6 @@ builder.Services.AddCors(o => o.AddPolicy("AllowAll",
   p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 app.UseCors("AllowAll");
 ```
-> For cookies/credentials use `.SetIsOriginAllowed(_ => true).AllowCredentials()` instead (don’t mix with `AllowAnyOrigin`).
 
 ---
 
@@ -414,5 +423,3 @@ Run:
 ```bash
 dotnet test
 ```
-
-For integration tests, use `WebApplicationFactory<Api.Program>` with **SQLite in-memory** or **Testcontainers** for SQL Server.
