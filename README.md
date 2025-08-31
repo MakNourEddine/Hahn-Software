@@ -25,8 +25,6 @@ A small yet realistic API demonstrating **Clean Architecture** (Domain / Applica
 - [CORS](#cors)
 - [Domain Events](#domain-events)
 - [Testing](#testing)
-- [Troubleshooting](#troubleshooting)
-- [Production Notes](#production-notes)
 
 ---
 
