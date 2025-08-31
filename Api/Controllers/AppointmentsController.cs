@@ -1,4 +1,5 @@
-﻿using Application.Features.Appointments;
+﻿using Application.DTOs;
+using Application.Features.Appointments;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -30,7 +31,10 @@ namespace Api.Controllers
 
 
         [HttpGet("by-dentist")]
-        public async Task<ActionResult<IReadOnlyList<ListAppointmentsByDentist.Dto>>> ByDentist([FromQuery] Guid dentistId, [FromQuery] DateOnly? date)
-        => Ok(await mediator.Send(new ListAppointmentsByDentist.Query(dentistId, date)));
+        public async Task<ActionResult<IReadOnlyList<AppointmentListItemDto>>> ListByDentist([FromQuery] Guid dentistId, [FromQuery] DateOnly? date, CancellationToken ct)
+        {
+            var result = await mediator.Send(new ListAppointmentsByDentist.Query(dentistId, date), ct);
+            return Ok(result);
+        }
     }
 }

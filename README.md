@@ -16,6 +16,11 @@ A small yet realistic API demonstrating **Clean Architecture** (Domain / Applica
   - [Database Migrations](#database-migrations)
 - [Configuration](#configuration)
 - [API Reference](#api-reference)
+  - [Dentists](#dentists)
+  - [Patients](#patients)
+  - [Services](#services)
+  - [Availability](#availability)
+  - [Appointments](#appointments)
 - [Validation Rules](#validation-rules)
 - [CORS](#cors)
 - [Domain Events](#domain-events)
@@ -63,10 +68,10 @@ A small yet realistic API demonstrating **Clean Architecture** (Domain / Applica
 ## Domain Model
 
 **Entities**
-- **Dentist** `{ Id: Guid, FullName: string }`
-- **Patient** `{ Id: Guid, FullName: string, Email: string }`
-- **Service** `{ Id: Guid, Name: string, DurationMinutes: int }`
-- **Appointment** `{ Id, DentistId, PatientId, ServiceId, StartUtc, DurationMinutes, Status }`  
+- **Dentist** `{ Id: Guid, FullName: string }` — methods: `Rename(...)`
+- **Patient** `{ Id: Guid, FullName: string, Email: string }` — methods: `Rename(...)`, `ChangeEmail(...)`, `Update(...)`
+- **Service** `{ Id: Guid, Name: string, DurationMinutes: int }` — methods: `Rename(...)`, `ChangeDuration(...)`, `Update(...)`
+- **Appointment** `{ Id, DentistId, PatientId, ServiceId, StartUtc (DateTimeOffset), DurationMinutes, Status }`  
   - `Status`: `Scheduled` | `Cancelled`  
   - `EndUtc` = `StartUtc + DurationMinutes`  
   - Methods: `Cancel(reason)`, `Reschedule(newStartUtc)`
@@ -78,8 +83,8 @@ A small yet realistic API demonstrating **Clean Architecture** (Domain / Applica
 
 **Business rules**
 - Clinic hours 09:00–17:00 **UTC** (configurable).  
-- Start times must align to **15-minute grid**.  
-- No overlapping appointments for the same dentist.
+- Start times align to **15-minute grid**.  
+- **No overlapping** appointments for the same dentist (enforced in domain logic).
 
 ---
 
@@ -95,12 +100,16 @@ src/
     Common/BaseEntity.cs, BaseEvent.cs
   Application/
     Common/Behaviors/ValidationBehavior.cs
+    DTOs/AppointmentListItemDto.cs, DentistDto.cs, PatientDto.cs, ServiceDto.cs
     Features/Appointments/
       BookAppointment.cs
       CancelAppointment.cs
       RescheduleAppointment.cs
-      GetAvailability.cs
-      ListByDentist.cs
+      GetAvailability.cs            // filters past slots when day = today
+      ListAppointmentsByDentist.cs  // projects patient/service names
+    Features/Dentists/DentistsCrud.cs
+    Features/Patients/PatientsCrud.cs
+    Features/Services/ServicesCrud.cs
   Infrastructure/
     Persistence/
       ApplicationDbContext.cs
@@ -111,6 +120,9 @@ src/
     Controllers/
       AppointmentsController.cs
       AvailabilityController.cs
+      DentistsController.cs
+      PatientsController.cs
+      ServicesController.cs
     Program.cs (Swagger, CORS, DI, Auto-Migrate)
   Tests/
     UnitTests/
@@ -242,15 +254,87 @@ using (var scope = app.Services.CreateScope())
 
 Base URL: `http://localhost:8080/api` (Swagger at `/swagger`).
 
-### Availability
-`GET /availability?dentistId={guid}&date=YYYY-MM-DD`  
-**200**
+### Dentists
+
+`GET /dentists` → `200 OK`
 ```json
-[ { "startUtc": "2025-09-01T09:00:00Z", "endUtc": "2025-09-01T09:15:00Z" } ]
+[ { "id": "guid", "fullName": "Dr. Jane Doe" } ]
 ```
 
-### Book appointment
-`POST /appointments/book`  
+`POST /dentists` → `200 OK` (returns new id)
+```json
+{ "fullName": "Dr. Jane Doe" }
+```
+
+`PUT /dentists/{id}` → `204 No Content`
+```json
+{ "fullName": "Dr. Jane Smith" }
+```
+
+`DELETE /dentists/{id}` → `204 No Content`
+
+---
+
+### Patients
+
+`GET /patients` → `200 OK`
+```json
+[ { "id": "guid", "fullName": "John Roe", "email": "john@example.com" } ]
+```
+
+`POST /patients` → `200 OK` (returns new id)
+```json
+{ "fullName": "John Roe", "email": "john@example.com" }
+```
+
+`PUT /patients/{id}` → `204 No Content`
+```json
+{ "fullName": "John Roe", "email": "john.roe@example.com" }
+```
+
+`DELETE /patients/{id}` → `204 No Content`
+
+---
+
+### Services
+
+`GET /services` → `200 OK`
+```json
+[ { "id": "guid", "name": "Cleaning", "durationMinutes": 30 } ]
+```
+
+`POST /services` → `200 OK` (returns new id)
+```json
+{ "name": "Cleaning", "durationMinutes": 30 }
+```
+
+`PUT /services/{id}` → `204 No Content`
+```json
+{ "name": "Deep Cleaning", "durationMinutes": 45 }
+```
+
+`DELETE /services/{id}` → `204 No Content`
+
+---
+
+### Availability
+
+`GET /availability?dentistId={guid}&date=YYYY-MM-DD` → `200 OK`  
+> **Only future slots are returned** if the date equals “today” in UTC.
+
+```json
+[
+  { "startUtc": "2025-09-01T09:00:00Z", "endUtc": "2025-09-01T09:15:00Z" },
+  { "startUtc": "2025-09-01T09:15:00Z", "endUtc": "2025-09-01T09:30:00Z" }
+]
+```
+
+---
+
+### Appointments
+
+**Book**
+`POST /appointments/book` → `200 OK` (returns appointment id)
 ```json
 {
   "dentistId": "11111111-1111-1111-1111-111111111111",
@@ -259,28 +343,35 @@ Base URL: `http://localhost:8080/api` (Swagger at `/swagger`).
   "startUtc": "2025-09-01T09:00:00Z"
 }
 ```
-**200**: `"<appointmentId-guid>"`
 
-### List by dentist & day
-`GET /appointments/by-dentist?dentistId={guid}&date=YYYY-MM-DD`  
-**200**
+**List by dentist & day** (returns names)
+`GET /appointments/by-dentist?dentistId={guid}&date=YYYY-MM-DD` → `200 OK`
 ```json
-[ { "id":"...", "startUtc":"...", "durationMinutes":30, "status":0, "patientId":"...", "serviceId":"..." } ]
+[
+  {
+    "id": "guid",
+    "startUtc": "2025-09-01T09:00:00Z",
+    "durationMinutes": 30,
+    "status": 0,
+    "patientId": "guid",
+    "patientName": "John Roe",
+    "serviceId": "guid",
+    "serviceName": "Cleaning"
+  }
+]
 ```
 
-### Reschedule
-`POST /appointments/{id}/reschedule`  
+**Reschedule**
+`POST /appointments/{id}/reschedule` → `204 No Content`
 ```json
 { "newStartUtc": "2025-09-01T09:30:00Z" }
 ```
-**204**
 
-### Cancel
-`POST /appointments/{id}/cancel`  
+**Cancel**
+`POST /appointments/{id}/cancel` → `204 No Content`
 ```json
 { "reason": "Schedule change" }
 ```
-**204**
 
 ---
 
@@ -288,7 +379,7 @@ Base URL: `http://localhost:8080/api` (Swagger at `/swagger`).
 
 - IDs must be non-empty GUIDs.  
 - Times must be **future**, on **15-minute grid**, within **09:00–17:00 UTC**.  
-- No dentist overlap.
+- No dentist overlap (domain invariant).
 
 Implemented with **FluentValidation** in each Command/Query; invariants also enforced in the `Appointment` aggregate.
 
@@ -325,34 +416,3 @@ dotnet test
 ```
 
 For integration tests, use `WebApplicationFactory<Api.Program>` with **SQLite in-memory** or **Testcontainers** for SQL Server.
-
----
-
-## Troubleshooting
-
-- **TCP Provider, error: 40** – Ensure SQL container is running and port mapping (1433) matches your connection string (`Server=localhost,1433`).  
-- **PendingModelChangesWarning** – Remove dynamic values from `HasData` (use fixed GUIDs/DateTimes).  
-- **`BaseEvent` requires a primary key** – `modelBuilder.Ignore<BaseEvent>();` and `b.Ignore(x => x.DomainEvents);` in configurations.  
-- **Swagger schema collisions for nested `…+Command`** – Use `CustomSchemaIds` (see above).  
-- **CORS blocked** – Ensure `UseCors` is before `MapControllers` and policy matches your frontend origin(s).
-
----
-
-## Production Notes
-
-- Lock down CORS to allowed origins.  
-- Use HTTPS (remove `Encrypt=false`); configure a real certificate.  
-- Add **Serilog** + sinks (Seq/ELK).  
-- Add **health checks** and Docker `HEALTHCHECK`.  
-- Run migrations as a deployment step rather than on each startup.  
-- Store secrets in a secret manager (Key Vault, AWS SM, etc.).
-
----
-
-## Seeded IDs (for quick testing)
-
-- Dentist: `11111111-1111-1111-1111-111111111111`  
-- Patient: `22222222-2222-2222-2222-222222222222`  
-- Service (Cleaning): `33333333-3333-3333-3333-333333333333`
-
-Use these in Swagger or the React frontend to book and list appointments.
